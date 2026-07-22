@@ -61,10 +61,6 @@ def extract_text_from_file(uploaded_file):
 def call_gemini_ai(job_desc, resume_text, api_key):
     genai.configure(api_key=api_key)
     
-    # Modelo otimizado para velocidade e instruções JSON
-    model = genai.GenerativeModel('gemini-2.5-flash', 
-                                  generation_config={"response_mime_type": "application/json"})
-    
     system_prompt = """
     Você é um especialista em Recrutamento e Seleção ATS.
     Analise o currículo em relação à vaga e retorne APENAS um objeto JSON com esta estrutura exata:
@@ -79,13 +75,18 @@ def call_gemini_ai(job_desc, resume_text, api_key):
     }
     """
     
+    # CORREÇÃO: O system_instruction entra na criação do modelo
+    model = genai.GenerativeModel(
+        model_name='gemini-2.5-flash', 
+        generation_config={"response_mime_type": "application/json"},
+        system_instruction=system_prompt
+    )
+    
     prompt = f"VAGA:\n{job_desc}\n\nCURRÍCULO:\n{resume_text}"
     
     try:
-        response = model.generate_content(
-            contents=prompt,
-            system_instruction=system_prompt
-        )
+        # CORREÇÃO: Passamos apenas o prompt para o gerador
+        response = model.generate_content(prompt)
         return json.loads(response.text)
     except Exception as e:
         raise Exception(f"Erro na IA Gemini: {str(e)}")
