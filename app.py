@@ -11,22 +11,36 @@ import datetime
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Analista ATS Pro", page_icon="📄", layout="wide")
 
-# --- INICIALIZAÇÃO DE ESTADO (SESSÃO) ---
+# --- CARREGAMENTO DE SEGREDOS (ENVIRONMENT VARIABLES) ---
+# A aplicação vai buscar as credenciais de forma segura aos "secrets" do Streamlit
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    st.error("⚠️ Erro crítico: Ficheiro de segredos não encontrado ou incompleto.")
+    st.info("Configure o ficheiro `.streamlit/secrets.toml` localmente ou os 'Secrets' no Streamlit Cloud.")
+    st.stop()
+
+# --- INICIALIZAÇÃO DE ESTADO (SESSÃO & SUPABASE) ---
 if "user" not in st.session_state:
     st.session_state.user = None
+    
 if "supabase" not in st.session_state:
-    st.session_state.supabase = None
+    try:
+        st.session_state.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        st.error(f"Erro ao ligar à base de dados: {e}")
+        st.stop()
 
 # --- FUNÇÕES DE EXTRAÇÃO DE TEXTO ---
 def fetch_job_description(url):
     try:
-        # Usa um header básico para evitar bloqueios simples
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         response = requests.get(url, headers=headers)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Remove scripts, styles e menus
         for script in soup(["script", "style", "nav", "footer", "header"]):
             script.extract()
             
@@ -58,8 +72,9 @@ def extract_text_from_file(uploaded_file):
         raise Exception(f"Erro ao ler o ficheiro: {str(e)}")
 
 # --- FUNÇÃO DA IA (GEMINI) ---
-def call_gemini_ai(job_desc, resume_text, api_key):
-    genai.configure(api_key=api_key)
+def call_gemini_ai(job_desc, resume_text):
+    # Usa a chave segura carregada no início
+    genai.configure(api_key=GEMINI_API_KEY)
     
     system_prompt = """
     Você é um especialista em Recrutamento e Seleção ATS.
@@ -75,7 +90,6 @@ def call_gemini_ai(job_desc, resume_text, api_key):
     }
     """
     
-    # CORREÇÃO: O system_instruction entra na criação do modelo
     model = genai.GenerativeModel(
         model_name='gemini-3.5-flash', 
         generation_config={"response_mime_type": "application/json"},
@@ -85,59 +99,43 @@ def call_gemini_ai(job_desc, resume_text, api_key):
     prompt = f"VAGA:\n{job_desc}\n\nCURRÍCULO:\n{resume_text}"
     
     try:
-        # CORREÇÃO: Passamos apenas o prompt para o gerador
         response = model.generate_content(prompt)
         return json.loads(response.text)
     except Exception as e:
         raise Exception(f"Erro na IA Gemini: {str(e)}")
 
-# --- BARRA LATERAL (CONFIG & AUTH) ---
+# --- BARRA LATERAL (APENAS AUTH) ---
 with st.sidebar:
-    st.header("⚙️ Configurações")
-    gemini_key = st.text_input("Gemini API Key", type="password", help="Obtenha no Google AI Studio")
+    st.image("https://cdn-icons-png.flaticon.com/512/942/942799.png", width=80)
+    st.header("Área Pessoal")
     
-    st.divider()
-    st.header("🗄️ Supabase (Opcional)")
-    sup_url = st.text_input("Supabase URL")
-    sup_key = st.text_input("Supabase Anon Key", type="password")
-    
-    if sup_url and sup_key and st.session_state.supabase is None:
-        try:
-            st.session_state.supabase = create_client(sup_url, sup_key)
-            st.success("Supabase Conectado!")
-        except Exception as e:
-            st.error(f"Erro ao ligar ao Supabase: {e}")
-            
-    # Autenticação
-    if st.session_state.supabase:
-        st.divider()
-        if st.session_state.user is None:
-            st.subheader("🔐 Aceder à Conta")
-            auth_email = st.text_input("E-mail")
-            auth_pass = st.text_input("Palavra-passe", type="password")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Entrar", use_container_width=True):
-                    try:
-                        res = st.session_state.supabase.auth.sign_in_with_password({"email": auth_email, "password": auth_pass})
-                        st.session_state.user = res.user
-                        st.rerun()
-                    except Exception as e:
-                        st.error("Erro no Login")
-            with col2:
-                if st.button("Registar", use_container_width=True):
-                    try:
-                        st.session_state.supabase.auth.sign_up({"email": auth_email, "password": auth_pass})
-                        st.success("Registo efetuado! Confirme o email.")
-                    except Exception as e:
-                        st.error("Erro no Registo")
-        else:
-            st.success(f"Logado como: {st.session_state.user.email}")
-            if st.button("Terminar Sessão", use_container_width=True):
-                st.session_state.supabase.auth.sign_out()
-                st.session_state.user = None
-                st.rerun()
+    if st.session_state.user is None:
+        st.write("Aceda para guardar o seu histórico de análises.")
+        auth_email = st.text_input("E-mail")
+        auth_pass = st.text_input("Palavra-passe", type="password")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Entrar", use_container_width=True):
+                try:
+                    res = st.session_state.supabase.auth.sign_in_with_password({"email": auth_email, "password": auth_pass})
+                    st.session_state.user = res.user
+                    st.rerun()
+                except Exception as e:
+                    st.error("Erro no Login. Verifique as credenciais.")
+        with col2:
+            if st.button("Registar", use_container_width=True):
+                try:
+                    st.session_state.supabase.auth.sign_up({"email": auth_email, "password": auth_pass})
+                    st.success("Registo efetuado! Pode entrar.")
+                except Exception as e:
+                    st.error("Erro no Registo.")
+    else:
+        st.success(f"Sessão iniciada:\n{st.session_state.user.email}")
+        if st.button("Terminar Sessão", use_container_width=True):
+            st.session_state.supabase.auth.sign_out()
+            st.session_state.user = None
+            st.rerun()
 
 # --- INTERFACE PRINCIPAL ---
 st.title("📄 Analista de Currículos ATS Pro")
@@ -155,9 +153,7 @@ with tab1:
         submit_btn = st.form_submit_button("Analisar Currículo", type="primary")
 
     if submit_btn:
-        if not gemini_key:
-            st.error("⚠️ Por favor, insira a sua Gemini API Key na barra lateral antes de continuar.")
-        elif not job_url or not uploaded_resume:
+        if not job_url or not uploaded_resume:
             st.warning("⚠️ Preencha a URL da vaga e anexe o currículo.")
         else:
             try:
@@ -167,8 +163,8 @@ with tab1:
                 with st.spinner('A ler o conteúdo do currículo...'):
                     resume_text = extract_text_from_file(uploaded_resume)
                     
-                with st.spinner('A Inteligência Artificial está a analisar o *match*...'):
-                    result = call_gemini_ai(job_desc, resume_text, gemini_key)
+                with st.spinner('A Inteligência Artificial está a analisar o perfil...'):
+                    result = call_gemini_ai(job_desc, resume_text)
                 
                 # Exibir Resultados
                 st.divider()
@@ -176,7 +172,6 @@ with tab1:
                 
                 col1, col2 = st.columns([1, 2])
                 with col1:
-                    # Renderiza o score com cor usando HTML nativo do Streamlit
                     score = result.get('score', 0)
                     color = "#198754" if score >= 80 else "#ffc107" if score >= 50 else "#dc3545"
                     st.markdown(f"""
@@ -218,7 +213,7 @@ with tab1:
                              height=400)
                 
                 # Gravar na Base de Dados (Se Logado)
-                if st.session_state.user and st.session_state.supabase:
+                if st.session_state.user:
                     try:
                         st.session_state.supabase.table("analyses").insert({
                             "user_id": st.session_state.user.id,
@@ -228,7 +223,7 @@ with tab1:
                         }).execute()
                         st.toast("Análise guardada no seu histórico!", icon="✅")
                     except Exception as e:
-                        st.toast(f"Não foi possível guardar no histórico: {e}", icon="⚠️")
+                        st.toast("Não foi possível guardar no histórico.", icon="⚠️")
 
             except Exception as e:
                 st.error(f"Erro no processamento: {str(e)}")
