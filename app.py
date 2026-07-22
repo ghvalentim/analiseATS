@@ -6,13 +6,18 @@ import pypdf
 import docx
 import json
 from supabase import create_client, Client
-import datetime
+import io
+
+# Importações para geração de PDF com ReportLab
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Analista ATS Pro", page_icon="📄", layout="wide")
 
 # --- CARREGAMENTO DE SEGREDOS (ENVIRONMENT VARIABLES) ---
-# A aplicação vai buscar as credenciais de forma segura aos "secrets" do Streamlit
 try:
     SUPABASE_URL = st.secrets["SUPABASE_URL"]
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
@@ -22,7 +27,7 @@ except Exception:
     st.info("Configure o ficheiro `.streamlit/secrets.toml` localmente ou os 'Secrets' no Streamlit Cloud.")
     st.stop()
 
-# --- INICIALIZAÇÃO DE ESTADO (SESSÃO & SUPABASE) ---
+# --- INICIALIZAÇÃO DE ESTADO ---
 if "user" not in st.session_state:
     st.session_state.user = None
     
@@ -71,9 +76,53 @@ def extract_text_from_file(uploaded_file):
     except Exception as e:
         raise Exception(f"Erro ao ler o ficheiro: {str(e)}")
 
+# --- FUNÇÃO DE GERAÇÃO DE PDF ---
+def generate_pdf_resume(resume_text):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=54, leftMargin=54, topMargin=54, bottomMargin=54)
+    story = []
+    
+    styles = getSampleStyleSheet()
+    
+    # Estilo otimizado para ATS (Limpo, sem elementos gráficos complexos)
+    body_style = ParagraphStyle(
+        'ATSBody',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=10,
+        leading=14,
+        textColor=colors.HexColor('#333333')
+    )
+    
+    # Processar o texto linha por linha para manter quebras de linha e formatação básica
+    for line in resume_text.split('\n'):
+        line = line.strip()
+        if not line:
+            story.append(Spacer(1, 8))
+            continue
+            
+        # Detetar se aparenta ser um cabeçalho/título de secção
+        if line.isupper() or line.endswith(':'):
+            header_style = ParagraphStyle(
+                'ATSHeader',
+                parent=styles['Heading2'],
+                fontName='Helvetica-Bold',
+                fontSize=12,
+                leading=16,
+                textColor=colors.HexColor('#0d6efd'),
+                spaceBefore=10,
+                spaceAfter=4
+            )
+            story.append(Paragraph(line, header_style))
+        else:
+            story.append(Paragraph(line, body_style))
+            
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
 # --- FUNÇÃO DA IA (GEMINI) ---
 def call_gemini_ai(job_desc, resume_text):
-    # Usa a chave segura carregada no início
     genai.configure(api_key=GEMINI_API_KEY)
     
     system_prompt = """
@@ -104,7 +153,7 @@ def call_gemini_ai(job_desc, resume_text):
     except Exception as e:
         raise Exception(f"Erro na IA Gemini: {str(e)}")
 
-# --- BARRA LATERAL (APENAS AUTH) ---
+# --- BARRA LATERAL (AUTENTICAÇÃO) ---
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/942/942799.png", width=80)
     st.header("Área Pessoal")
@@ -122,12 +171,12 @@ with st.sidebar:
                     st.session_state.user = res.user
                     st.rerun()
                 except Exception as e:
-                    st.error("Erro no Login. Verifique as credenciais.")
+                    st.error("Erro no Login.")
         with col2:
             if st.button("Registar", use_container_width=True):
                 try:
                     st.session_state.supabase.auth.sign_up({"email": auth_email, "password": auth_pass})
-                    st.success("Registo efetuado! Pode entrar.")
+                    st.success("Registo efetuado!")
                 except Exception as e:
                     st.error("Erro no Registo.")
     else:
@@ -208,9 +257,19 @@ with tab1:
                     st.warning("**A Melhorar:**\n" + "\n".join([f"- {w}" for w in result.get('weaknesses', [])]))
 
                 st.subheader("📝 Sugestão de Reestruturação")
-                st.text_area("Copie o texto abaixo para atualizar o seu currículo:", 
-                             value=result.get('restructuredResume', ''), 
-                             height=400)
+                
+                optimized_text = result.get('restructuredResume', '')
+                st.text_area("Pré-visualização do texto:", value=optimized_text, height=300)
+                
+                # Botão de Download em PDF
+                pdf_bytes = generate_pdf_resume(optimized_text)
+                st.download_button(
+                    label="📥 Descarregar Currículo Otimizado (PDF)",
+                    data=pdf_bytes,
+                    file_name="curriculo_otimizado_ats.pdf",
+                    mime="application/pdf",
+                    type="primary"
+                )
                 
                 # Gravar na Base de Dados (Se Logado)
                 if st.session_state.user:
@@ -221,7 +280,7 @@ with tab1:
                             "score": score,
                             "score_feedback": result.get('scoreFeedback', '')
                         }).execute()
-                        st.toast("Análise guardada no seu histórico!", icon="✅")
+                        st.toast("Análise guardada no histórico!", icon="✅")
                     except Exception as e:
                         st.toast("Não foi possível guardar no histórico.", icon="⚠️")
 
