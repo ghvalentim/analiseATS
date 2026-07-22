@@ -1,6 +1,7 @@
 import streamlit as st
 import google.generativeai as genai
 import requests
+import os
 from bs4 import BeautifulSoup
 import pypdf
 import docx
@@ -19,12 +20,12 @@ st.set_page_config(page_title="Analista ATS Pro", page_icon="📄", layout="wide
 
 # --- CARREGAMENTO DE SEGREDOS (ENVIRONMENT VARIABLES) ---
 try:
-    SUPABASE_URL = st.secrets["SUPABASE_URL"]
-    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+    SUPABASE_URL = st.secrets.get("SUPABASE_URL") or os.environ.get("SUPABASE_URL")
+    SUPABASE_KEY = st.secrets.get("SUPABASE_KEY") or os.environ.get("SUPABASE_KEY")
+    GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
 except Exception:
     st.error("⚠️ Erro crítico: Ficheiro de segredos não encontrado ou incompleto.")
-    st.info("Configure o ficheiro `.streamlit/secrets.toml` localmente ou os 'Secrets' no Streamlit Cloud.")
+    st.info("Variáveis de ambiente não encontradas")
     st.stop()
 
 # --- INICIALIZAÇÃO DE ESTADO ---
