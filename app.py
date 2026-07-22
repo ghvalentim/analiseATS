@@ -77,7 +77,7 @@ def call_gemini_ai(job_desc, resume_text, api_key):
     
     # CORREÇÃO: O system_instruction entra na criação do modelo
     model = genai.GenerativeModel(
-        model_name='gemini-1.5-flash', 
+        model_name='gemini-3.5-flash', 
         generation_config={"response_mime_type": "application/json"},
         system_instruction=system_prompt
     )
