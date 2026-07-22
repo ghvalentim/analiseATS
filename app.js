@@ -1,14 +1,232 @@
-const apiKey = "AQ.Ab8RN6JoHtC3SijSLeE7YGnkKvRIZ9tF1z8imFBZjByevnhDtA"; 
-        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+        // Variáveis Globais
+        let supabaseClient = null;
+        let currentUser = null;
+        let authModalInstance = null;
 
-        // Elementos do DOM
+        // Referências do DOM
         const form = document.getElementById('ats-form');
         const loadingOverlay = document.getElementById('loading-overlay');
         const loadingText = document.getElementById('loading-text');
-        const resultsSection = document.getElementById('results-section');
-        const inputSection = document.getElementById('input-section');
+        
+        // Inicialização
+        document.addEventListener('DOMContentLoaded', () => {
+            authModalInstance = new bootstrap.Modal(document.getElementById('authModal'));
+            loadConfig();
+        });
 
-        // Função para extrair texto da URL usando um proxy CORS
+        // ----------------------------------------------------
+        // SISTEMA DE ALERTAS / UI HELPERS
+        // ----------------------------------------------------
+        function showMessage(message, type = 'danger') {
+            const container = document.getElementById('message-container');
+            container.innerHTML = `
+                <div class="alert alert-${type} alert-dismissible fade show shadow-sm" role="alert">
+                    ${message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>`;
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function showLoading(show, text = "A processar...") {
+            loadingOverlay.style.display = show ? 'flex' : 'none';
+            if (show) loadingText.textContent = text;
+        }
+
+        function showSection(sectionId) {
+            document.getElementById('input-section').style.display = 'none';
+            document.getElementById('results-section').style.display = 'none';
+            document.getElementById('history-section').style.display = 'none';
+            document.getElementById('hero-header').style.display = sectionId === 'input-section' ? 'block' : 'none';
+            document.getElementById(sectionId).style.display = 'block';
+        }
+
+        // ----------------------------------------------------
+        // CONFIGURAÇÃO E INICIALIZAÇÃO SUPABASE
+        // ----------------------------------------------------
+        function loadConfig() {
+            const savedGemini = localStorage.getItem('gemini_key') || '';
+            const savedSupUrl = localStorage.getItem('supabase_url') || '';
+            const savedSupKey = localStorage.getItem('supabase_key') || '';
+
+            document.getElementById('api-key-input').value = savedGemini;
+            document.getElementById('supabase-url-input').value = savedSupUrl;
+            document.getElementById('supabase-key-input').value = savedSupKey;
+
+            if (savedSupUrl && savedSupKey) {
+                initSupabase(savedSupUrl, savedSupKey);
+            }
+            updateNavbarUI();
+        }
+
+        document.getElementById('save-config-btn').addEventListener('click', () => {
+            const gemini = document.getElementById('api-key-input').value.trim();
+            const supUrl = document.getElementById('supabase-url-input').value.trim();
+            const supKey = document.getElementById('supabase-key-input').value.trim();
+            
+            localStorage.setItem('gemini_key', gemini);
+            localStorage.setItem('supabase_url', supUrl);
+            localStorage.setItem('supabase_key', supKey);
+            
+            if (supUrl && supKey) {
+                initSupabase(supUrl, supKey);
+            }
+            showMessage('Configurações guardadas com sucesso!', 'success');
+        });
+
+        function initSupabase(url, key) {
+            try {
+                supabaseClient = window.supabase.createClient(url, key);
+                
+                // Subscrever às alterações de autenticação
+                supabaseClient.auth.onAuthStateChange((event, session) => {
+                    currentUser = session?.user || null;
+                    updateNavbarUI();
+                });
+                
+                // Verificar sessão atual
+                supabaseClient.auth.getSession().then(({ data: { session } }) => {
+                    currentUser = session?.user || null;
+                    updateNavbarUI();
+                });
+            } catch (err) {
+                console.error("Erro ao inicializar Supabase:", err);
+                showMessage("Erro ao ligar ao Supabase. Verifique a URL e a Chave.", "danger");
+            }
+        }
+
+        // ----------------------------------------------------
+        // AUTENTICAÇÃO
+        // ----------------------------------------------------
+        function updateNavbarUI() {
+            const nav = document.getElementById('nav-actions');
+            nav.innerHTML = '';
+
+            if (currentUser) {
+                nav.innerHTML = `
+                    <li class="nav-item me-3"><span class="nav-link text-white"><i class="bi bi-person"></i> ${currentUser.email}</span></li>
+                    <li class="nav-item"><button class="btn btn-light btn-sm me-2" onclick="loadHistory()">Histórico</button></li>
+                    <li class="nav-item"><button class="btn btn-outline-light btn-sm" onclick="handleLogout()">Sair</button></li>
+                `;
+            } else {
+                nav.innerHTML = `
+                    <li class="nav-item"><button class="btn btn-light btn-sm" onclick="authModalInstance.show()">Entrar / Registar</button></li>
+                `;
+            }
+        }
+
+        async function handleAuth(action) {
+            if (!supabaseClient) return showMessage("Configure o Supabase primeiro nas Configurações.", "warning");
+            
+            const email = document.getElementById('auth-email').value;
+            const password = document.getElementById('auth-password').value;
+            const alertContainer = document.getElementById('auth-alert-container');
+            
+            if (!email || password.length < 6) {
+                alertContainer.innerHTML = `<div class="alert alert-warning py-2">Preencha o email e uma palavra-passe (mínimo 6 caracteres).</div>`;
+                return;
+            }
+
+            try {
+                let error;
+                if (action === 'login') {
+                    const res = await supabaseClient.auth.signInWithPassword({ email, password });
+                    error = res.error;
+                } else {
+                    const res = await supabaseClient.auth.signUp({ email, password });
+                    error = res.error;
+                    if(!error) alertContainer.innerHTML = `<div class="alert alert-success py-2">Registo feito! Se o seu projeto exige confirmação, verifique o email.</div>`;
+                }
+
+                if (error) throw error;
+
+                if(action === 'login') {
+                    authModalInstance.hide();
+                    showMessage("Sessão iniciada com sucesso!", "success");
+                }
+            } catch (err) {
+                alertContainer.innerHTML = `<div class="alert alert-danger py-2">${err.message}</div>`;
+            }
+        }
+
+        document.getElementById('btn-login').addEventListener('click', () => handleAuth('login'));
+        document.getElementById('btn-register').addEventListener('click', () => handleAuth('register'));
+
+        async function handleLogout() {
+            if(supabaseClient) await supabaseClient.auth.signOut();
+            showSection('input-section');
+            showMessage("Sessão terminada.", "info");
+        }
+
+        // ----------------------------------------------------
+        // OPERAÇÕES DE DADOS (HISTORY & SAVE)
+        // ----------------------------------------------------
+        async function saveAnalysisToSupabase(jobUrl, analysisData) {
+            if (!supabaseClient || !currentUser) return; // Só guarda se estiver logado
+            
+            try {
+                const { error } = await supabaseClient
+                    .from('analyses')
+                    .insert([{
+                        user_id: currentUser.id,
+                        job_url: jobUrl,
+                        score: analysisData.score,
+                        score_feedback: analysisData.scoreFeedback,
+                        // Pode expandir a base de dados para guardar o JSON completo se desejar
+                    }]);
+                
+                if (error) throw error;
+            } catch (err) {
+                console.error("Erro ao guardar histórico:", err);
+                // Falhar silenciosamente para o utilizador, já que a análise funcionou
+            }
+        }
+
+        async function loadHistory() {
+            if (!supabaseClient || !currentUser) {
+                showMessage("Inicie sessão para ver o histórico.", "warning");
+                return;
+            }
+
+            showSection('history-section');
+            const historyList = document.getElementById('history-list');
+            historyList.innerHTML = '<div class="text-center w-100"><div class="spinner-border text-primary"></div></div>';
+
+            try {
+                const { data, error } = await supabaseClient
+                    .from('analyses')
+                    .select('*')
+                    .order('created_at', { ascending: false });
+
+                if (error) throw error;
+
+                if (!data || data.length === 0) {
+                    historyList.innerHTML = '<div class="col-12 text-center text-muted"><p>Ainda não tem análises guardadas.</p></div>';
+                    return;
+                }
+
+                historyList.innerHTML = data.map(item => `
+                    <div class="col-md-6 mb-3">
+                        <div class="card p-3 h-100">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="badge ${item.score >= 80 ? 'bg-success' : (item.score >= 50 ? 'bg-warning text-dark' : 'bg-danger')}">
+                                    Score: ${item.score}%
+                                </span>
+                                <small class="text-muted">${new Date(item.created_at).toLocaleDateString('pt-PT')}</small>
+                            </div>
+                            <p class="mb-1 text-truncate" title="${item.job_url}"><strong>Vaga:</strong> <a href="${item.job_url}" target="_blank">${item.job_url}</a></p>
+                            <p class="text-muted small m-0">${item.score_feedback}</p>
+                        </div>
+                    </div>
+                `).join('');
+
+            } catch (err) {
+                historyList.innerHTML = `<div class="alert alert-danger w-100">Erro ao carregar histórico: ${err.message}</div>`;
+            }
+        }
+
+        // ----------------------------------------------------
+        // LÓGICA CORE (EXTRAÇÃO & GEMINI IA)
+        // ----------------------------------------------------
         async function fetchJobDescription(url) {
             try {
                 const response = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`);
@@ -17,35 +235,27 @@ const apiKey = "AQ.Ab8RN6JoHtC3SijSLeE7YGnkKvRIZ9tF1z8imFBZjByevnhDtA";
                 
                 const parser = new DOMParser();
                 const doc = parser.parseFromString(data.contents, 'text/html');
-                
-                // Limpar elementos desnecessários do site alvo
                 doc.querySelectorAll('script, style, nav, footer, header, noscript, svg').forEach(el => el.remove());
                 
                 const text = doc.body.innerText.replace(/\s+/g, ' ').trim();
                 if (!text || text.length < 50) throw new Error("Texto insuficiente extraído da página.");
                 return text;
             } catch (e) {
-                console.error(e);
-                throw new Error("Não foi possível extrair o texto da URL. O site pode estar a bloquear o acesso automatizado.");
+                throw new Error("Não foi possível extrair o texto da URL. O site pode estar a bloquear o acesso.");
             }
         }
 
-        // Função para ler ficheiros (PDF, DOC, DOCX, MD, HTML)
         async function extractTextFromFile(file) {
             const ext = file.name.split('.').pop().toLowerCase();
-            
-            if (['md', 'html', 'htm', 'txt'].includes(ext)) {
-                return await file.text();
-            }
+            if (['md', 'html', 'htm', 'txt'].includes(ext)) return await file.text();
             
             if (ext === 'docx') {
                 const arrayBuffer = await file.arrayBuffer();
-                const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
+                const result = await mammoth.extractRawText({ arrayBuffer });
                 return result.value;
             }
 
             if (ext === 'doc') {
-                // Leitura básica para tentar salvar o texto de ficheiros binários antigos .doc
                 const buffer = await file.arrayBuffer();
                 return new TextDecoder('utf-8', { fatal: false }).decode(buffer)
                        .replace(/[^\x20-\x7E\xA0-\xFF\u0100-\u017F\u0180-\u024F\n\r\t]/g, " ");
@@ -66,208 +276,113 @@ const apiKey = "AQ.Ab8RN6JoHtC3SijSLeE7YGnkKvRIZ9tF1z8imFBZjByevnhDtA";
             throw new Error(`Formato de ficheiro não suportado: ${ext}.`);
         }
 
-        // Função principal de submissão do formulário
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             
             const jobUrl = document.getElementById('job-url').value;
             const resumeFile = document.getElementById('resume-file').files[0];
+            const geminiKey = localStorage.getItem('gemini_key');
 
-            if (!jobUrl || !resumeFile) {
-                alert("Por favor, preencha a URL e anexe o ficheiro.");
+            if (!geminiKey) {
+                showMessage("Falta a chave da API do Gemini. Insira a chave nas 'Configurações de API'.", "warning");
+                document.getElementById('configCollapse').classList.add('show');
                 return;
             }
 
-            showLoading(true, "A extrair dados da vaga a partir da URL...");
-            resultsSection.style.display = 'none';
+            showLoading(true, "A extrair dados da vaga...");
 
             try {
                 const jobDescription = await fetchJobDescription(jobUrl);
-                
-                showLoading(true, "A processar o seu currículo...");
+                showLoading(true, "A ler o currículo...");
                 const resumeText = await extractTextFromFile(resumeFile);
-
-                showLoading(true, "A IA está a analisar a aderência do perfil...");
-                const analysisResult = await callGeminiAI(jobDescription, resumeText);
+                
+                showLoading(true, "A IA está a analisar o perfil...");
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${geminiKey}`;
+                const analysisResult = await callGeminiAI(jobDescription, resumeText, apiUrl);
                 
                 populateResults(analysisResult);
                 showLoading(false);
-                resultsSection.style.display = 'block';
-                inputSection.scrollIntoView({ behavior: 'smooth' });
-                window.scrollTo({ top: document.getElementById('results-section').offsetTop - 20, behavior: 'smooth' });
+                showSection('results-section');
+                
+                // Gravar na Base de Dados se o utilizador tiver sessão iniciada
+                saveAnalysisToSupabase(jobUrl, analysisResult);
 
             } catch (error) {
-                console.error("Erro na análise:", error);
                 showLoading(false);
-                alert(error.message || "Ocorreu um erro ao processar a análise. Tente novamente mais tarde.");
+                showMessage(error.message || "Ocorreu um erro na análise. Tente novamente.", "danger");
             }
         });
 
-        // Função para chamar a API do Gemini com Retry Logic (Backoff Exponencial)
-        async function callGeminiAI(jobDescription, resumeText, retries = 5) {
+        async function callGeminiAI(jobDescription, resumeText, apiUrl, retries = 3) {
             const systemPrompt = `
-                Você é um especialista em Recrutamento e Seleção, e um Analista de Sistemas ATS (Applicant Tracking System).
-                Sua tarefa é analisar o currículo do candidato em relação à descrição da vaga fornecida e retornar um JSON estrito.
-                Não inclua formatação markdown como \`\`\`json no início ou no fim. Retorne APENAS um objeto JSON válido.
-                
-                Estrutura obrigatória do JSON:
+                Você é um especialista em Recrutamento e Seleção ATS.
+                Sua tarefa é analisar o currículo em relação à descrição da vaga e retornar APENAS um JSON estrito.
                 {
-                    "score": <número de 0 a 100 representando a aderência do currículo à vaga>,
-                    "scoreFeedback": "<uma frase curta resumindo o score>",
-                    "keywordsFound": ["palavra1", "palavra2", ...],
-                    "keywordsMissing": ["palavra1", "palavra2", ...],
-                    "strengths": ["ponto forte 1", "ponto forte 2", ...],
-                    "weaknesses": ["ponto de melhoria 1", "ponto de melhoria 2", ...],
-                    "restructuredResume": "<O texto do currículo reescrito, otimizado para ATS, usando verbos de ação, quantificando resultados e incluindo as palavras-chave necessárias. Formate em texto limpo com quebras de linha (\\n).>"
+                    "score": <número de 0 a 100>,
+                    "scoreFeedback": "<frase curta resumindo o score>",
+                    "keywordsFound": ["palavra1"],
+                    "keywordsMissing": ["palavra1"],
+                    "strengths": ["ponto 1"],
+                    "weaknesses": ["melhoria 1"],
+                    "restructuredResume": "<Texto do currículo otimizado>"
                 }
-            `;
-
-            const userPrompt = `
-                DESCRIÇÃO DA VAGA:
-                ${jobDescription}
-
-                CURRÍCULO DO CANDIDATO:
-                ${resumeText}
             `;
 
             const payload = {
-                contents: [{ parts: [{ text: userPrompt }] }],
+                contents: [{ parts: [{ text: `VAGA:\n${jobDescription}\n\nCURRÍCULO:\n${resumeText}` }] }],
                 systemInstruction: { parts: [{ text: systemPrompt }] },
-                generationConfig: {
-                    responseMimeType: "application/json"
-                }
+                generationConfig: { responseMimeType: "application/json" }
             };
 
-            // Implementação de Retry
             let delay = 1000;
             for (let i = 0; i < retries; i++) {
                 try {
-                    const response = await fetch(API_URL, {
+                    const response = await fetch(apiUrl, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
                     });
 
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     const data = await response.json();
-                    const jsonString = data.candidates?.[0]?.content?.parts?.[0]?.text;
-                    
-                    if (!jsonString) throw new Error("Resposta da IA vazia ou mal formatada.");
-                    
-                    return JSON.parse(jsonString);
-
+                    return JSON.parse(data.candidates[0].content.parts[0].text);
                 } catch (err) {
-                    if (i === retries - 1) throw err; // Falhou na última tentativa
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    delay *= 2; // Backoff exponencial
+                    if (i === retries - 1) throw new Error("A Inteligência Artificial não conseguiu processar o pedido. Verifique a sua chave de API.");
+                    await new Promise(r => setTimeout(r, delay));
+                    delay *= 2;
                 }
             }
         }
 
-        // Atualizar o DOM com os resultados da IA
         function populateResults(data) {
-            // Score
             const scoreCircle = document.getElementById('score-circle');
             scoreCircle.textContent = `${data.score}%`;
+            scoreCircle.className = 'score-circle ' + (data.score >= 80 ? 'score-high' : (data.score >= 50 ? 'score-medium' : 'score-low'));
             
-            // Remover classes de cor anteriores
-            scoreCircle.classList.remove('score-high', 'score-medium', 'score-low');
-            
-            if (data.score >= 80) {
-                scoreCircle.classList.add('score-high');
-            } else if (data.score >= 50) {
-                scoreCircle.classList.add('score-medium');
-            } else {
-                scoreCircle.classList.add('score-low');
-            }
-
             document.getElementById('score-feedback').textContent = data.scoreFeedback;
 
-            // Palavras-chave Encontradas
-            const keywordsFoundContainer = document.getElementById('keywords-found');
-            keywordsFoundContainer.innerHTML = '';
-            if (data.keywordsFound && data.keywordsFound.length > 0) {
-                data.keywordsFound.forEach(kw => {
-                    const span = document.createElement('span');
-                    span.className = 'badge bg-success keyword-badge';
-                    span.textContent = kw;
-                    keywordsFoundContainer.appendChild(span);
-                });
-            } else {
-                keywordsFoundContainer.innerHTML = '<span class="text-muted">Nenhuma palavra-chave principal identificada.</span>';
-            }
+            const makeBadges = (arr, type) => arr?.length ? arr.map(w => `<span class="badge bg-${type} keyword-badge">${w}</span>`).join('') : '<span class="text-muted">Nenhuma encontrada.</span>';
+            document.getElementById('keywords-found').innerHTML = makeBadges(data.keywordsFound, 'success');
+            document.getElementById('keywords-missing').innerHTML = makeBadges(data.keywordsMissing, 'danger');
 
-            // Palavras-chave Faltando
-            const keywordsMissingContainer = document.getElementById('keywords-missing');
-            keywordsMissingContainer.innerHTML = '';
-            if (data.keywordsMissing && data.keywordsMissing.length > 0) {
-                data.keywordsMissing.forEach(kw => {
-                    const span = document.createElement('span');
-                    span.className = 'badge bg-danger keyword-badge';
-                    span.textContent = kw;
-                    keywordsMissingContainer.appendChild(span);
-                });
-            } else {
-                keywordsMissingContainer.innerHTML = '<span class="text-muted">Excelente! Seu currículo cobre as palavras-chave principais.</span>';
-            }
+            const makeList = (arr, icon, color) => arr.map(i => `<li class="list-group-item"><i class="bi ${icon} text-${color} me-2"></i> ${i}</li>`).join('');
+            document.getElementById('strengths-list').innerHTML = makeList(data.strengths, 'bi-check2', 'success');
+            document.getElementById('weaknesses-list').innerHTML = makeList(data.weaknesses, 'bi-arrow-right-short', 'warning');
 
-            // Pontos Fortes
-            const strengthsList = document.getElementById('strengths-list');
-            strengthsList.innerHTML = '';
-            data.strengths.forEach(strength => {
-                const li = document.createElement('li');
-                li.className = 'list-group-item';
-                li.innerHTML = `<i class="bi bi-check2 text-success me-2"></i> ${strength}`;
-                strengthsList.appendChild(li);
-            });
-
-            // Pontos de Melhoria
-            const weaknessesList = document.getElementById('weaknesses-list');
-            weaknessesList.innerHTML = '';
-            data.weaknesses.forEach(weakness => {
-                const li = document.createElement('li');
-                li.className = 'list-group-item';
-                li.innerHTML = `<i class="bi bi-arrow-right-short text-warning me-2"></i> ${weakness}`;
-                weaknessesList.appendChild(li);
-            });
-
-            // Currículo Reestruturado
-            const restructuredResume = document.getElementById('restructured-resume');
-            restructuredResume.textContent = data.restructuredResume;
+            document.getElementById('restructured-resume').textContent = data.restructuredResume;
         }
 
-        // Loader helper
-        function showLoading(show, text = "A IA está a analisar o seu currículo...") {
-            loadingOverlay.style.display = show ? 'flex' : 'none';
-            if (show) loadingText.textContent = text;
-        }
-
-        // Copiar texto reestruturado para o clipboard
         document.getElementById('copy-btn').addEventListener('click', () => {
-            const textToCopy = document.getElementById('restructured-resume').innerText;
+            const text = document.getElementById('restructured-resume').innerText;
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
             
-            // Tratamento para iframe fallback caso navigator.clipboard falhe
-            try {
-                const textArea = document.createElement("textarea");
-                textArea.value = textToCopy;
-                document.body.appendChild(textArea);
-                textArea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textArea);
-                
-                const copyBtn = document.getElementById('copy-btn');
-                const originalText = copyBtn.innerHTML;
-                copyBtn.innerHTML = '<i class="bi bi-check"></i> Copiado!';
-                copyBtn.classList.replace('btn-outline-secondary', 'btn-success');
-                
-                setTimeout(() => {
-                    copyBtn.innerHTML = originalText;
-                    copyBtn.classList.replace('btn-success', 'btn-outline-secondary');
-                }, 2000);
-            } catch (err) {
-                console.error("Falha ao copiar: ", err);
-            }
+            const btn = document.getElementById('copy-btn');
+            btn.innerHTML = '<i class="bi bi-check"></i> Copiado!';
+            btn.className = 'btn btn-success btn-sm';
+            setTimeout(() => { btn.innerHTML = '<i class="bi bi-clipboard"></i> Copiar'; btn.className = 'btn btn-outline-secondary btn-sm'; }, 2000);
         });
